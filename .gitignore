@@ -1,0 +1,8 @@
+Section1/.terraform/*
+Section2/.terraform/*
+*/*.tfstate
+*/*.tfstate.*
+Section1/.terraform.*
+Section2/.terraform.*
+*/terraform.tf
+notes
