@@ -19,7 +19,8 @@ resource "azurerm_subnet" "app_network_subnets" {
 }
 
 resource "azurerm_network_interface" "webinterfaces" {
-  name                = var.app_environment["production"].network_interface_name
+  for_each = var.app_environment["production"].subnets["websubnet01"].machines
+  name                = each.value.network_interface_name
   location            = local.resource_location
   resource_group_name = azurerm_resource_group.appgrp.name
 
@@ -27,12 +28,36 @@ resource "azurerm_network_interface" "webinterfaces" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.app_network_subnets["websubnet01"].id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.webip.id
+    public_ip_address_id          = azurerm_public_ip.webip[each.key].id
+  }
+}
+
+resource "azurerm_network_interface" "appinterfaces" {
+  for_each = var.app_environment["production"].subnets["appsubnet01"].machines
+  name                = each.value.network_interface_name
+  location            = local.resource_location
+  resource_group_name = azurerm_resource_group.appgrp.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.app_network_subnets["appsubnet01"].id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.appip[each.key].id
   }
 }
 
 resource "azurerm_public_ip" "webip" {
-  name                = var.app_environment["production"].public_ip_address_name
+  for_each = var.app_environment["production"].subnets["websubnet01"].machines
+  name                = each.value.public_ip_address_name
+  location            = local.resource_location
+  resource_group_name = azurerm_resource_group.appgrp.name
+  allocation_method   = "Static"
+  
+}
+
+resource "azurerm_public_ip" "appip" {
+  for_each = var.app_environment["production"].subnets["appsubnet01"].machines
+  name                = each.value.public_ip_address_name
   location            = local.resource_location
   resource_group_name = azurerm_resource_group.appgrp.name
   allocation_method   = "Static"
@@ -44,17 +69,21 @@ resource "azurerm_network_security_group" "app_nsg" {
   location            = local.resource_location
   resource_group_name = azurerm_resource_group.appgrp.name
 
-  security_rule {
-    name                       = "AllowRDP"
-    priority                   = 300
+  dynamic security_rule {
+    for_each = local.network_security_group_rules
+    content {
+    name                       = "Allow-${security_rule.value.destination_port_range}"
+    priority                   = security_rule.value.priority
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "3389"
+    destination_port_range     = security_rule.value.destination_port_range
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
+  }
+
 }
 
 resource "azurerm_subnet_network_security_group_association" "subnet_app_nsg" {
@@ -64,14 +93,15 @@ resource "azurerm_subnet_network_security_group_association" "subnet_app_nsg" {
 }
 
 resource "azurerm_windows_virtual_machine" "webvm" {
-  name                = var.app_environment["production"].virtual_machine_name
+  for_each = var.app_environment["production"].subnets["websubnet01"].machines
+  name                = each.key
   resource_group_name = azurerm_resource_group.appgrp.name
   location            = local.resource_location
   size                = var.app_environment["production"].virtual_machine_size
   admin_username      = "appadmin"
   admin_password      = azurerm_key_vault_secret.vmpassword.value
   network_interface_ids = [
-    azurerm_network_interface.webinterfaces.id,
+    azurerm_network_interface.webinterfaces[each.key].id,
   ]
 
 
@@ -121,6 +151,38 @@ resource "azurerm_key_vault_secret" "vmpassword" {
     "Set",
     "List",
     "Delete",
-    "Purge"
+    "Purge",
+    "Recover",
   ]
+}
+
+data "local_file" "cloudinit" {
+  filename = "cloudinit"
+}
+
+resource "azurerm_linux_virtual_machine" "appvm" {
+  for_each = var.app_environment["production"].subnets["appsubnet01"].machines
+  name                = each.key
+  resource_group_name = azurerm_resource_group.appgrp.name
+  location            = local.resource_location
+  size                = "Standard_B1s"
+  admin_username      = "adminuser"
+  admin_password      = azurerm_key_vault_secret.vmpassword.value
+  disable_password_authentication = false
+  custom_data = data.local_file.cloudinit.content_base64
+  network_interface_ids = [
+    azurerm_network_interface.appinterfaces[each.key].id,
+  ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
+    version   = "latest"
+  }
 }

@@ -7,12 +7,14 @@ variable "app_environment" {
     virtual_machine_size = string
     virtual_network_name    = string
     virtual_network_cidr_block = string
-    network_interface_name = string
-    public_ip_address_name = string
     tenant_id = string
     subnets=map(object(
         {
             cidr_block = string
+            machines = map(object({
+                network_interface_name = string
+                public_ip_address_name = string
+            }))
         }))
   }))
 }
